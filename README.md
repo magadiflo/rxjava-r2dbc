@@ -155,3 +155,52 @@ con las siguientes dependencias:
 └─────────────────┴───────────────────────────┘
 ```
 
+## ⚙️ PASO 2: application.yml — Configuración de la aplicación
+
+### 🔄 Versión nueva (Spring MVC + RxJava)
+
+````yml
+server:
+  port: 8080
+  error:
+    include-message: always
+
+spring:
+  application:
+    name: rxjava-r2dbc
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5435/db_rxjava_r2dbc
+    username: magadiflo
+    password: magadiflo
+
+logging:
+  level:
+    dev.magadiflo.app: debug
+    io.r2dbc.postgresql.QUERY: debug
+    io.r2dbc.postgresql.PARAM: debug
+````
+
+- `spring.r2dbc`
+    - Esta sección le dice a Spring cómo conectarse a PostgreSQL mediante `R2DBC`. Lo único que cambiamos es el
+      nombre de la base de datos `db_rxjava_r2dbc` para que sea coherente con nuestro nuevo proyecto.
+    - Nota algo importante en la URL: empieza con `r2dbc:postgresql://` y no con `jdbc:postgresql://`. Esa diferencia
+      es clave:
+
+| Protocolo             | Tipo           | ¿Bloquea el hilo? |
+|-----------------------|----------------|-------------------|
+| `jdbc:postgresql://`  | JDBC clásico   | ✅ Sí bloquea      |
+| `r2dbc:postgresql://` | R2DBC reactivo | ❌ No bloquea      |
+
+Nosotros usamos `r2dbc` porque queremos que el acceso a la base de datos sea no bloqueante,
+coherente con la filosofía reactiva de `RxJava`.
+
+- `logging`. Estas tres líneas son de logging y no tienen relación con Reactor ni RxJava:
+    - `dev.magadiflo.app: debug` — Muestra todos los logs de nivel DEBUG de tu propio código.
+    - `io.r2dbc.postgresql.QUERY: debug` — Muestra las queries SQL que `R2DBC` ejecuta en `PostgreSQL`. Muy útil para
+      depurar.
+    - `io.r2dbc.postgresql.PARAM: debug` — Muestra los parámetros que se pasan a esas queries. Útil para ver los valores
+      reales en cada consulta.
+
+> 💡 El `application.yml` prácticamente no cambia porque `R2DBC` sigue siendo nuestra forma de conectarnos a la
+> base de datos. Lo que cambia en este proyecto no es la configuración, sino la forma en que consumimos esa conexión en
+> el código Java.

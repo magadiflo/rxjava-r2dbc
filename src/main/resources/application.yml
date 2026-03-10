@@ -1,3 +1,18 @@
+server:
+  port: 8080
+  error:
+    include-message: always
+
 spring:
   application:
     name: rxjava-r2dbc
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5435/db_rxjava_r2dbc
+    username: magadiflo
+    password: magadiflo
+
+logging:
+  level:
+    dev.magadiflo.app: debug
+    io.r2dbc.postgresql.QUERY: debug
+    io.r2dbc.postgresql.PARAM: debug
