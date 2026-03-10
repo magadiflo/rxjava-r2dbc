@@ -1,0 +1,23 @@
+services:
+  s-postgres-rxjava:
+    image: postgres:17-alpine
+    container_name: c-postgres-rxjava
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: db_rxjava_r2dbc
+      POSTGRES_USER: magadiflo
+      POSTGRES_PASSWORD: magadiflo
+    ports:
+      - '5435:5432'
+    volumes:
+      - postgres-rxjava-data:/var/lib/postgresql/data
+    networks:
+      - rxjava-net
+
+volumes:
+  postgres-rxjava-data:
+    name: postgres-rxjava-data
+
+networks:
+  rxjava-net:
+    name: rxjava-net
