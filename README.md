@@ -498,3 +498,101 @@ public class EmployeeMapper {
     }
 }
 ````
+
+## 🚨 PASO 8: Excepciones y Manejo de Errores
+
+### 8.1 — EmployeeNotFoundException
+
+¿Cambia algo? ❌ Absolutamente nada. Es una excepción personalizada Java pura. No tiene ninguna relación con Reactor ni
+RxJava.
+
+````java
+public class EmployeeNotFoundException extends RuntimeException {
+    public EmployeeNotFoundException(Long employeeId) {
+        super("El empleado con id [%d] no fue encontrado".formatted(employeeId));
+    }
+}
+````
+
+### 8.2 — GlobalExceptionHandler
+
+````java
+
+@Slf4j
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(EmployeeNotFoundException.class)
+    public ResponseEntity<ProblemDetail> handleEmployeeNotFoundException(Exception ex) {
+        log.debug("handleEmployeeNotFoundException: {}", ex.getMessage());
+        var response = this.build(HttpStatus.NOT_FOUND, ex, problemDetail ->
+                problemDetail.setTitle("Empleado no encontrado"));
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ProblemDetail> handleMethodArgumentNotValidException(MethodArgumentNotValidException ex) {
+        log.debug("MethodArgumentNotValidException: {}", ex.getMessage());
+        Map<String, List<String>> errorsByField = ex.getFieldErrors().stream()
+                .collect(Collectors.groupingBy(
+                        FieldError::getField,
+                        Collectors.mapping(FieldError::getDefaultMessage, Collectors.toList())
+                ));
+        var response = this.build(HttpStatus.BAD_REQUEST, ex, problemDetail -> {
+            problemDetail.setTitle("Error de validación de campos");
+            problemDetail.setProperty("errors", errorsByField);
+        });
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ProblemDetail> handleException(Exception ex) {
+        log.debug("handleException: {}", ex.getMessage(), ex);
+        var response = this.build(HttpStatus.INTERNAL_SERVER_ERROR, ex, problemDetail ->
+                problemDetail.setTitle("Ocurrió un error en el servidor. Por favor, contacta al administrador."));
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+    }
+
+
+    private ProblemDetail build(HttpStatus status, Exception ex, Consumer<ProblemDetail> detailConsumer) {
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(status, ex.getMessage());
+        detailConsumer.accept(problemDetail);
+        return problemDetail;
+    }
+}
+````
+
+#### 1️⃣ `Mono<ResponseEntity<ProblemDetail>>` → `ResponseEntity<ProblemDetail>`
+
+Este es el cambio más importante y tiene mucho sentido:
+
+- En `WebFlux` los handlers del `@RestControllerAdvice` devolvían `Mono<ResponseEntity<...>>` porque todo en
+  `WebFlux` vive dentro del mundo reactivo de `Reactor`. Incluso las respuestas de error debían envolverse en un `Mono`.
+- En `Spring MVC` ya no necesitamos ese envoltorio. Los métodos del handler devuelven directamente
+  `ResponseEntity<ProblemDetail>` porque `Spring MVC` es síncrono. No hay `Mono`, no hay `Flux`, simplemente retornas
+  el objeto y Spring se encarga del resto.
+
+````
+// WebFlux  → necesita Mono porque todo es reactivo
+return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body(response));
+
+// Spring MVC → retorno directo, limpio y simple
+return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+````
+
+#### 2️⃣` WebExchangeBindException` → `MethodArgumentNotValidException`
+
+Este cambio es muy importante y es algo que muchos desarrolladores pasan por alto:
+
+| Excepción                         | Framework      | Descripción                                                                                    |
+|-----------------------------------|----------------|------------------------------------------------------------------------------------------------|
+| `WebExchangeBindException`        | Spring WebFlux | Se lanza cuando falla una validación con `@Valid` en controladores reactivos (WebFlux).        |
+| `MethodArgumentNotValidException` | Spring MVC     | Se lanza cuando falla una validación con `@Valid` en controladores tradicionales (Spring MVC). |
+
+Son dos excepciones distintas para el mismo problema pero en frameworks diferentes. Como ahora usamos `Spring MVC`
+con `spring-boot-starter-web`, la excepción que se lanza al fallar una validación `@Valid` es
+`MethodArgumentNotValidException`.
+
+> 💡 Si dejáramos `WebExchangeBindException` en nuestro proyecto `Spring MVC`, el handler nunca se ejecutaría porque
+> esa excepción nunca se lanzaría. Los errores de validación caerían en el handler genérico de `Exception.class`.
+
