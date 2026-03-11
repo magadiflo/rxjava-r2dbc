@@ -317,3 +317,52 @@ public class RxjavaR2dbcApplication {
 
 }
 ````
+
+## 🏛️ PASO 5: Entidad Employee
+
+### 📖 ¿Cambia algo en las anotaciones o atributos?
+
+❌ Absolutamente nada. Las anotaciones de la entidad son de `Spring Data R2DBC` y `Lombok`, no tienen ninguna relación
+con `Reactor` ni `RxJava`.
+
+````java
+
+@ToString
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+@Setter
+@Getter
+@Table(name = "employees")
+public class Employee {
+    @Id
+    private Long id;
+    private String firstName;
+    private String lastName;
+    private String position;
+    @Column("is_full_time")
+    private Boolean fullTime;
+}
+````
+
+### ¿Por qué eliminamos fromRow() y managerFromRow()?
+
+Estos dos métodos estáticos en tu proyecto original existían para mapear manualmente filas de resultados SQL a objetos
+Employee. Se usaban típicamente cuando hacías queries SQL nativas con JOINs complejos donde R2DBC no podía mapear
+automáticamente.
+
+````bash
+// Ejemplo de cómo se usaban en el proyecto original
+.map(row -> Employee.fromRow(row))
+.map(row -> Employee.managerFromRow(row))
+````
+
+En nuestro proyecto nuevo no los necesitamos porque:
+
+- Nuestro CRUD es simple y directo — sin JOINs complejos.
+- `RxJava3CrudRepository` mapea automáticamente los resultados a objetos `Employee`.
+- Mantenerlos sería código muerto que solo confundiría.
+
+> 💡 `Regla general`: Si `RxJava3CrudRepository` puede resolver la operación automáticamente, úsalo. Solo necesitarías
+> mapeo manual si tuvieras queries SQL nativas muy complejas con JOINs, y en ese caso los métodos de mapeo irían en una
+> clase separada, no en la entidad.
