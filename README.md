@@ -274,3 +274,46 @@ El orden importa:
 1️⃣ schema.sql  →  primero crea la estructura (tabla)
 2️⃣ data.sql    →  luego inserta los datos 
 ````
+
+## ⚙️ PASO 4: `DatabaseConfig` y clase principal
+
+### 4.1 — `DatabaseConfig`
+
+¿Cambia algo? ❌ Absolutamente nada. Esta clase es configuración pura de Spring y R2DBC, no tiene ninguna relación con
+`Reactor` ni `RxJava`.
+
+````java
+
+@Profile("!test")
+@Configuration
+public class DatabaseConfig {
+    @Bean
+    public ConnectionFactoryInitializer initializer(ConnectionFactory connectionFactory) {
+        Resource schema = new ClassPathResource("sql/schema.sql");
+        Resource data = new ClassPathResource("sql/data.sql");
+        ResourceDatabasePopulator resourceDatabasePopulator = new ResourceDatabasePopulator(schema, data);
+
+        ConnectionFactoryInitializer initializer = new ConnectionFactoryInitializer();
+        initializer.setConnectionFactory(connectionFactory);
+        initializer.setDatabasePopulator(resourceDatabasePopulator);
+        return initializer;
+    }
+}
+````
+
+### 4.2 — Clase principal
+
+¿Cambia algo? Solo el nombre de la clase, que `Spring Initializr` genera automáticamente basándose en el `artifactId`
+de tu `pom.xml`. En nuestro caso `rxjava-r2dbc` se convierte en `RxjavaR2dbcApplication`.
+
+````java
+
+@SpringBootApplication
+public class RxjavaR2dbcApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(RxjavaR2dbcApplication.class, args);
+    }
+
+}
+````
