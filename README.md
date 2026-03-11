@@ -883,3 +883,202 @@ Flux<T>          →       Observable<T>   (N valores, sin backpressure)
 Flux<T>          →       Flowable<T>     (N valores, con backpressure)
 ```
 
+## 🎮 PASO 10: `EmployeeController`
+
+Spring MVC soporta nativamente retornar tipos reactivos de RxJava directamente desde
+el controller, sin necesidad de bloquear. Spring internamente se suscribe al `Single`
+o `Completable` y resuelve la respuesta cuando el valor esté disponible.
+
+```java
+// ✅ Versión correcta — Spring maneja la suscripción internamente
+public Single<ResponseEntity<EmployeeResponse>> findEmployee(@PathVariable Long employeeId) {
+    return this.employeeService.showEmployee(employeeId)
+            .subscribeOn(Schedulers.io())
+            .map(ResponseEntity::ok);
+}
+```
+
+### ¿Qué es `Schedulers.io()`?
+
+`Schedulers.io()` le dice a RxJava en qué pool de hilos debe ejecutarse la operación.
+RxJava tiene varios schedulers disponibles:
+
+| Scheduler                  | ¿Para qué se usa?                                      |
+|----------------------------|--------------------------------------------------------|
+| `Schedulers.io()`          | Operaciones de I/O: base de datos, red, disco          |
+| `Schedulers.computation()` | Operaciones intensivas de CPU: cálculos, procesamiento |
+| `Schedulers.newThread()`   | Crea un hilo nuevo por cada operación                  |
+| `Schedulers.single()`      | Un único hilo secuencial                               |
+
+En nuestro caso usamos `Schedulers.io()` porque todas nuestras operaciones son consultas
+a la base de datos — operaciones de I/O por naturaleza. Este scheduler mantiene un pool
+de hilos optimizado para este tipo de trabajo, liberando el hilo principal para atender
+otras peticiones mientras espera la respuesta de la BD.
+
+```
+Hilo principal (Spring MVC)
+    │
+    └── .subscribeOn(Schedulers.io())
+              │
+              └── Hilo de I/O (ejecuta la query en PostgreSQL)
+                        │
+                        └── Resultado listo → Spring resuelve el ResponseEntity
+```
+
+### Controller completo — versión correcta
+
+```java
+
+@Slf4j
+@RequiredArgsConstructor
+@RestController
+@RequestMapping(path = "/api/v1/employees")
+public class EmployeeController {
+
+    private final EmployeeService employeeService;
+
+    @GetMapping
+    public Single<ResponseEntity<List<EmployeeResponse>>> findAllEmployees(@RequestParam(required = false) String position,
+                                                                           @RequestParam(required = false) Boolean fullTime) {
+        return this.employeeService.getAllEmployees(position, fullTime)
+                .doOnNext(employeeResponse -> log.info("{}", employeeResponse))
+                .toList()
+                .subscribeOn(Schedulers.io())
+                .map(ResponseEntity::ok);
+    }
+
+    @GetMapping(path = "/{employeeId}")
+    public Single<ResponseEntity<EmployeeResponse>> findEmployee(@PathVariable Long employeeId) {
+        return this.employeeService.showEmployee(employeeId)
+                .doOnSuccess(employeeResponse -> log.info("{}", employeeResponse))
+                .subscribeOn(Schedulers.io())
+                .map(ResponseEntity::ok);
+    }
+
+    @PostMapping
+    public Single<ResponseEntity<EmployeeResponse>> saveEmployee(@Valid @RequestBody EmployeeRequest request) {
+        return this.employeeService.createEmployee(request)
+                .doOnSuccess(employeeResponse -> log.info("{}", employeeResponse))
+                .subscribeOn(Schedulers.io())
+                .map(employeeResponse -> ResponseEntity
+                        .status(HttpStatus.CREATED)
+                        .body(employeeResponse));
+    }
+
+    @PutMapping(path = "/{employeeId}")
+    public Single<ResponseEntity<EmployeeResponse>> updateEmployee(@PathVariable Long employeeId,
+                                                                   @Valid @RequestBody EmployeeRequest request) {
+        return this.employeeService.updateEmployee(employeeId, request)
+                .doOnSuccess(employeeResponse -> log.info("{}", employeeResponse))
+                .subscribeOn(Schedulers.io())
+                .map(ResponseEntity::ok);
+    }
+
+    @DeleteMapping(path = "/{employeeId}")
+    public Completable deleteEmployee(@PathVariable Long employeeId) {
+        return this.employeeService.deleteEmployee(employeeId)
+                .subscribeOn(Schedulers.io());
+    }
+}
+```
+
+### Explicación método por método
+
+#### `findAllEmployees` — `Observable` → `Single<List<T>>`
+
+```bash
+return this.employeeService.getAllEmployees(position, fullTime)
+        .doOnNext(employeeResponse -> log.info("{}", employeeResponse))
+        .toList()
+        .subscribeOn(Schedulers.io())
+        .map(ResponseEntity::ok);
+```
+
+**`.doOnNext()`** — efecto secundario para loggear cada elemento emitido por el
+`Observable` sin modificarlo.
+
+**`.toList()`** — recolecta todos los elementos del `Observable<EmployeeResponse>`
+y los convierte en un `Single<List<EmployeeResponse>>`. Spring MVC sabe manejar
+`Single` como retorno de un controller.
+
+**`.subscribeOn(Schedulers.io())`** — indica que toda la cadena debe ejecutarse
+en el pool de hilos de I/O.
+
+**`.map(ResponseEntity::ok)`** — envuelve la lista en un `ResponseEntity` con
+status 200.
+
+#### `findEmployee` — `Single` directo
+
+```bash
+return this.employeeService.showEmployee(employeeId)
+        .doOnSuccess(employeeResponse -> log.info("{}", employeeResponse))
+        .subscribeOn(Schedulers.io())
+        .map(ResponseEntity::ok);
+```
+
+**`.doOnSuccess()`** — equivalente a `doOnNext()` pero para `Single`. Se ejecuta
+cuando el `Single` emite su único valor exitoso. No se ejecuta si hay un error.
+
+**`.map(ResponseEntity::ok)`** — transforma el `EmployeeResponse` en un
+`ResponseEntity<EmployeeResponse>` con status 200.
+
+Si el empleado no existe, el `Single` termina en error con `EmployeeNotFoundException`,
+que Spring captura automáticamente con el `GlobalExceptionHandler`.
+
+#### `saveEmployee` — `Single` con status 201
+
+```bash
+return this.employeeService.createEmployee(request)
+        .doOnSuccess(employeeResponse -> log.info("{}", employeeResponse))
+        .subscribeOn(Schedulers.io())
+        .map(employeeResponse -> ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(employeeResponse));
+```
+
+La diferencia respecto a `findEmployee` es que aquí construimos el `ResponseEntity`
+manualmente con status `201 CREATED` en lugar de usar `ResponseEntity::ok` (que
+devuelve 200). Esto sigue la convención REST donde una creación exitosa retorna 201.
+
+#### `updateEmployee` — `Single` con status 200
+
+```bash
+return this.employeeService.updateEmployee(employeeId, request)
+        .doOnSuccess(employeeResponse -> log.info("{}", employeeResponse))
+        .subscribeOn(Schedulers.io())
+        .map(ResponseEntity::ok);
+```
+
+Idéntico en estructura a `findEmployee`. Si el empleado no existe, el servicio
+lanza `EmployeeNotFoundException` a través del `Maybe.error()` que definimos
+en el servicio, y el `GlobalExceptionHandler` lo captura.
+
+#### `deleteEmployee` — `Completable` directo
+
+```bash
+return this.employeeService.deleteEmployee(employeeId)
+        .subscribeOn(Schedulers.io());
+```
+
+El método más limpio de todos. Retorna `Completable` directamente — Spring MVC
+sabe que cuando el `Completable` termine exitosamente debe responder con `204 No Content`.
+No necesitamos construir ningún `ResponseEntity` porque `Completable` no emite valores.
+
+### Tabla maestra de equivalencias — Reactor vs RxJava
+
+| Concepto                   | Reactor                           | RxJava 3                          |
+|----------------------------|-----------------------------------|-----------------------------------|
+| 1 valor garantizado        | `Mono<T>`                         | `Single<T>`                       |
+| 0 o 1 valor                | `Mono<T>` (puede estar vacío)     | `Maybe<T>`                        |
+| Sin valor                  | `Mono<Void>`                      | `Completable`                     |
+| N valores sin backpressure | `Flux<T>`                         | `Observable<T>`                   |
+| N valores con backpressure | `Flux<T>`                         | `Flowable<T>`                     |
+| Si vacío → error           | `.switchIfEmpty(Mono.error(..))`  | `.switchIfEmpty(Maybe.error(..))` |
+| Transformar valor          | `.map()`                          | `.map()`                          |
+| Encadenar reactivos        | `.flatMap()`                      | `.flatMap()`                      |
+| Log sin modificar (N)      | `.doOnNext()`                     | `.doOnNext()`                     |
+| Log sin modificar (1)      | `.doOnNext()`                     | `.doOnSuccess()`                  |
+| Completable encadenado     | `.flatMap()` → `Mono<Void>`       | `.flatMapCompletable()`           |
+| Hilo de ejecución          | `.publishOn()` / `.subscribeOn()` | `.subscribeOn(Schedulers.io())`   |
+| Recolectar en lista        | `.collectList()`                  | `.toList()`                       |
+| Maybe → Single             | No necesario (Mono es ambos)      | `.toSingle()`                     |
