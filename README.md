@@ -11,7 +11,7 @@ se trabaja con `rxJava`.
 
 ---
 
-## 📦 PASO 1: pom.xml — Explicación completa
+## 📦 PASO 1: `pom.xml` — Explicación completa
 
 Creamos el proyecto desde
 [Spring Initializr](https://start.spring.io/#!type=maven-project&language=java&platformVersion=3.5.11&packaging=jar&configurationFileFormat=yaml&jvmVersion=21&groupId=dev.magadiflo&artifactId=rxjava-r2dbc&name=rxjava-r2dbc&description=Demo%20project%20for%20Spring%20Boot&packageName=dev.magadiflo.app&dependencies=web,data-r2dbc,validation,postgresql,lombok)
@@ -155,7 +155,7 @@ con las siguientes dependencias:
 └─────────────────┴───────────────────────────┘
 ```
 
-## ⚙️ PASO 2: application.yml — Configuración de la aplicación
+## ⚙️ PASO 2: `application.yml` — Configuración de la aplicación
 
 ### 🔄 Versión nueva (Spring MVC + RxJava)
 
@@ -204,3 +204,73 @@ coherente con la filosofía reactiva de `RxJava`.
 > 💡 El `application.yml` prácticamente no cambia porque `R2DBC` sigue siendo nuestra forma de conectarnos a la
 > base de datos. Lo que cambia en este proyecto no es la configuración, sino la forma en que consumimos esa conexión en
 > el código Java.
+
+## 🗄️ PASO 3: Scripts SQL — `schema.sql` y `data.sql`
+
+### 🔍 ¿Cambia algo respecto al proyecto original?
+
+Absolutamente nada. Los scripts SQL son independientes de cualquier framework reactivo. Son SQL puro y se quedan
+exactamente igual.
+
+### 📁 Ubicación
+
+Crea la carpeta `src/main/resources/sql/` y dentro los dos archivos:
+
+#### `schema.sql` — igual que el original
+
+Crea la tabla employees si no existe. BIGSERIAL es un tipo de PostgreSQL que genera automáticamente un número entero
+largo autoincremental, perfecto para IDs.
+
+````
+CREATE TABLE IF NOT EXISTS employees(
+    id BIGSERIAL PRIMARY KEY,
+    first_name VARCHAR(255) NOT NULL,
+    last_name VARCHAR(255) NOT NULL,
+    position VARCHAR(255) NOT NULL,
+    is_full_time BOOLEAN NOT NULL
+);
+````
+
+#### `data.sql` — igual que el original
+
+Primero limpia la tabla con `TRUNCATE` y reinicia el contador del ID, luego inserta 20 empleados de prueba. Esto
+garantiza que cada vez que la aplicación arranque, la base de datos tenga siempre los mismos datos limpios.
+
+````
+TRUNCATE TABLE employees RESTART IDENTITY CASCADE;
+
+INSERT INTO employees(first_name, last_name, position, is_full_time)
+VALUES ('Carlos', 'Gómez', 'Gerente', true),
+       ('Ana', 'Martínez', 'Desarrollador', true),
+       ('Luis', 'Fernández', 'Diseñador', false),
+       ('María', 'Rodríguez', 'Analista', true),
+       ('José', 'Pérez', 'Soporte', true),
+       ('Laura', 'Sánchez', 'Desarrollador', true),
+       ('Jorge', 'López', 'Analista', false),
+       ('Sofía', 'Díaz', 'Gerente', true),
+       ('Manuel', 'Torres', 'Soporte', true),
+       ('Lucía', 'Morales', 'Diseñador', true),
+       ('Miguel', 'Hernández', 'Desarrollador', true),
+       ('Elena', 'Ruiz', 'Analista', false),
+       ('Pablo', 'Jiménez', 'Desarrollador', true),
+       ('Carmen', 'Navarro', 'Soporte', true),
+       ('Raúl', 'Domínguez', 'Gerente', true),
+       ('Beatriz', 'Vargas', 'Desarrollador', true),
+       ('Francisco', 'Muñoz', 'Soporte', true),
+       ('Marta', 'Ortega', 'Diseñador', false),
+       ('Andrés', 'Castillo', 'Analista', true),
+       ('Isabel', 'Ramos', 'Desarrollador', true); 
+````
+
+### 💡 Dato importante — ¿Cómo se ejecutan estos scripts?
+
+Estos scripts no se ejecutan solos. Se ejecutan gracias a la clase `DatabaseConfig` que veremos en el siguiente paso.
+Ese bean `ConnectionFactoryInitializer` es quien le dice a Spring: *"al arrancar la aplicación, ejecuta estos dos
+archivos SQL en este orden"*.
+
+El orden importa:
+
+````
+1️⃣ schema.sql  →  primero crea la estructura (tabla)
+2️⃣ data.sql    →  luego inserta los datos 
+````
