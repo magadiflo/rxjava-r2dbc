@@ -435,3 +435,66 @@ Al extender `RxJava3CrudRepository`, heredamos automáticamente estos métodos s
 > `Single` en cambio siempre debe emitir exactamente `1` resultado o `un error`, por eso no sería correcto para
 > un `findById` donde el registro podría no existir.
 
+## 📦 PASO 7: DTOs y Mapper
+
+### 🔍 ¿Cambia algo respecto al proyecto original?
+
+❌ Absolutamente nada. Los DTOs y el Mapper son clases Java puras que no tienen ninguna relación con Reactor ni RxJava.
+Se quedan exactamente igual.
+
+#### 7.1 — `EmployeeRequest`
+
+````java
+public record EmployeeRequest(Long id,
+
+                              // Campos que sí requieren validación
+                              @NotBlank
+                              String firstName,
+                              @NotBlank
+                              String lastName,
+                              @NotBlank
+                              String position,
+                              @NotNull
+                              Boolean fullTime) {
+}
+````
+
+#### 7.2 — `EmployeeResponse`
+
+````java
+public record EmployeeResponse(Long id,
+                               String firstName,
+                               String lastName,
+                               String position,
+                               Boolean fullTime) {
+}
+````
+
+#### 7.3 — `EmployeeMapper`
+
+````java
+
+@Slf4j
+@Component
+public class EmployeeMapper {
+    public EmployeeResponse toEmployeeResponse(Employee employee) {
+        return new EmployeeResponse(
+                employee.getId(),
+                employee.getFirstName(),
+                employee.getLastName(),
+                employee.getPosition(),
+                employee.getFullTime()
+        );
+    }
+
+    public Employee toEmployee(EmployeeRequest employeeRequest) {
+        return Employee.builder()
+                .id(employeeRequest.id())
+                .firstName(employeeRequest.firstName())
+                .lastName(employeeRequest.lastName())
+                .position(employeeRequest.position())
+                .fullTime(employeeRequest.fullTime())
+                .build();
+    }
+}
+````
