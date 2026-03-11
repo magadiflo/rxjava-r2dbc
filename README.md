@@ -370,7 +370,7 @@ En nuestro proyecto nuevo no los necesitamos porque:
 ## 🗃️ PASO 6: `EmployeeRepository`
 
 ````java
-public interface EmployeeRepository extends RxJava3CrudRepository<Employee, Integer> {
+public interface EmployeeRepository extends RxJava3CrudRepository<Employee, Long> {
     Observable<Employee> findByPosition(String position);
 
     Observable<Employee> findByFullTime(Boolean isFullTime);
@@ -595,4 +595,291 @@ con `spring-boot-starter-web`, la excepción que se lanza al fallar una validaci
 
 > 💡 Si dejáramos `WebExchangeBindException` en nuestro proyecto `Spring MVC`, el handler nunca se ejecutaría porque
 > esa excepción nunca se lanzaría. Los errores de validación caerían en el handler genérico de `Exception.class`.
+
+## ⚙️ PASO 9: `EmployeeService` e `EmployeeServiceImpl`
+
+### 9.1 — Interfaz EmployeeService
+
+````java
+public interface EmployeeService {
+    Observable<EmployeeResponse> getAllEmployees(String position, Boolean isFullTime);
+
+    Single<EmployeeResponse> showEmployee(Long employeeId);
+
+    Single<EmployeeResponse> createEmployee(EmployeeRequest request);
+
+    Single<EmployeeResponse> updateEmployee(Long employeeId, EmployeeRequest employeeRequest);
+
+    Completable deleteEmployee(Long employeeId);
+}
+````
+
+#### Tabla de equivalencias
+
+| Original (Reactor)       | Nuevo (RxJava)                 | Motivo                                |
+|--------------------------|--------------------------------|---------------------------------------|
+| `Flux<EmployeeResponse>` | `Observable<EmployeeResponse>` | Múltiples resultados sin backpressure |
+| `Mono<EmployeeResponse>` | `Single<EmployeeResponse>`     | Exactamente 1 resultado garantizado   |
+| `Mono<Void>`             | `Completable`                  | Sin resultado, solo éxito o error     |
+
+> 💡 Nota que no usamos `Maybe<T>` en la interfaz porque todos nuestros métodos o devuelven un resultado garantizado
+> `(Single)` o lanzan un error si no encuentran datos. `Maybe` lo veremos aparecer más adelante en la implementación,
+> cuando interactuemos directamente con el repositorio.
+
+### 9.2 — `EmployeeServiceImpl` — Explicación método por método
+
+````java
+
+@Slf4j
+@RequiredArgsConstructor
+@Service
+@Transactional(readOnly = true)
+public class EmployeeServiceImpl implements EmployeeService {
+
+    private final EmployeeRepository employeeRepository;
+    private final EmployeeMapper employeeMapper;
+
+    @Override
+    public Observable<EmployeeResponse> getAllEmployees(String position, Boolean isFullTime) {
+        if (Objects.isNull(position) && Objects.isNull(isFullTime)) {
+            return this.employeeRepository.findAll()
+                    .map(this.employeeMapper::toEmployeeResponse)
+                    .toObservable();
+        }
+        if (Objects.nonNull(position) && Objects.nonNull(isFullTime)) {
+            return this.employeeRepository.findByPositionAndFullTime(position, isFullTime)
+                    .map(this.employeeMapper::toEmployeeResponse);
+        }
+        if (Objects.nonNull(position)) {
+            return this.employeeRepository.findByPosition(position)
+                    .map(this.employeeMapper::toEmployeeResponse);
+        }
+        return this.employeeRepository.findByFullTime(isFullTime)
+                .map(this.employeeMapper::toEmployeeResponse);
+    }
+
+    @Override
+    public Single<EmployeeResponse> showEmployee(Long employeeId) {
+        return this.employeeRepository.findById(employeeId)
+                .switchIfEmpty(Maybe.error(() -> new EmployeeNotFoundException(employeeId)))
+                .toSingle()
+                .map(this.employeeMapper::toEmployeeResponse);
+    }
+
+    @Override
+    public Single<EmployeeResponse> createEmployee(EmployeeRequest request) {
+        return this.employeeRepository.save(Employee.builder()
+                        .firstName(request.firstName())
+                        .lastName(request.lastName())
+                        .position(request.position())
+                        .fullTime(request.fullTime())
+                        .build()
+                )
+                .map(this.employeeMapper::toEmployeeResponse);
+    }
+
+    @Override
+    public Single<EmployeeResponse> updateEmployee(Long employeeId, EmployeeRequest employeeRequest) {
+        return this.employeeRepository.findById(employeeId)
+                .switchIfEmpty(Maybe.error(new EmployeeNotFoundException(employeeId)))
+                .toSingle()
+                .map(employeeDB -> {
+                    log.info("Empleado encontrado: {}", employeeDB);
+                    employeeDB.setFirstName(employeeRequest.firstName());
+                    employeeDB.setLastName(employeeRequest.lastName());
+                    employeeDB.setPosition(employeeRequest.position());
+                    employeeDB.setFullTime(employeeRequest.fullTime());
+                    return employeeDB;
+                })
+                .flatMap(employee -> this.employeeRepository.save(employee).toObservable()
+                        .doOnNext(employeeDB -> log.info("Empleado actualizado: {}", employeeDB))
+                        .firstOrError()
+                )
+                .map(this.employeeMapper::toEmployeeResponse);
+    }
+
+    @Override
+    public Completable deleteEmployee(Long employeeId) {
+        return this.employeeRepository.findById(employeeId)
+                .switchIfEmpty(Maybe.error(() -> new EmployeeNotFoundException(employeeId)))
+                .toSingle()
+                .flatMapCompletable(employee -> this.employeeRepository.deleteById(employeeId));
+
+    }
+}
+````
+
+#### `getAllEmployees` — `Flux` → `Observable`
+
+```java
+// Antes (Reactor)
+public Flux<EmployeeResponse> getAllEmployees(String position, Boolean isFullTime) {
+    return this.employeeRepository.findAll()
+            .map(this.employeeMapper::toEmployeeResponse);
+}
+
+// Ahora (RxJava)
+public Observable<EmployeeResponse> getAllEmployees(String position, Boolean isFullTime) {
+    return this.employeeRepository.findAll()
+            .map(this.employeeMapper::toEmployeeResponse);
+}
+```
+
+Este método es el más simple de todos. El repositorio ya devuelve `Observable<Employee>`
+directamente gracias a `RxJava3CrudRepository`. El operador `.map()` funciona exactamente
+igual que en Reactor — transforma cada elemento emitido aplicando una función.
+
+#### `showEmployee` — Aparece `Maybe` y `toSingle()`
+
+```bash
+// Antes (Reactor)
+return this.employeeRepository.findById(employeeId)      // Mono<Employee>
+        .switchIfEmpty(Mono.error(...))                   // si vacío → error
+        .map(this.employeeMapper::toEmployeeResponse);    // transforma
+
+// Ahora (RxJava)
+return this.employeeRepository.findById(employeeId)                           // Maybe<Employee>
+        .switchIfEmpty(Maybe.error(new EmployeeNotFoundException(employeeId))) // si vacío → error
+        .toSingle()                                                            // Maybe → Single
+        .map(this.employeeMapper::toEmployeeResponse);                         // transforma
+```
+
+**¿Por qué el repositorio devuelve `Maybe<Employee>` en `findById`?**
+
+Porque `findById` puede devolver **cero o un resultado**:
+
+- Si el empleado **existe** → emite ese empleado
+- Si **no existe** → no emite nada (vacío)
+
+Eso es exactamente la definición de `Maybe<T>` — 0 o 1 valor. En Reactor esto se
+representaba con `Mono<T>`, que también podía estar vacío.
+
+**¿Qué hace `switchIfEmpty(Maybe.error(...))`?**
+
+Es exactamente igual al `switchIfEmpty(Mono.error(...))` de Reactor. Le dice:
+*"si el `Maybe` está vacío, en lugar de completar sin valor, lanza este error"*.
+
+**¿Qué hace `.toSingle()`?**
+
+Convierte el `Maybe<Employee>` en `Single<Employee>`. Esto es posible porque en este
+punto ya sabemos que si llegamos aquí, el `Maybe` tiene un valor (si estaba vacío,
+ya lanzamos el error antes). `Single` garantiza exactamente 1 valor.
+
+```
+Maybe<Employee>  →  (si vacío → error)  →  .toSingle()  →  Single<Employee>
+```
+
+#### `createEmployee` — `Mono` → `Single`
+
+```bash
+// Antes (Reactor)
+return this.employeeRepository.save(...)    // Mono<Employee>
+        .map(...);
+
+// Ahora (RxJava)
+return this.employeeRepository.save(...)    // Single<Employee>
+        .map(...);
+```
+
+El más limpio de todos. El método `save()` del `RxJava3CrudRepository` devuelve
+directamente `Single<Employee>` — siempre guarda y devuelve exactamente 1 entidad.
+El operador `.map()` funciona igual que en Reactor.
+
+#### `updateEmployee` — El más complejo
+
+```bash
+return this.employeeRepository.findById(employeeId)
+        .switchIfEmpty(Maybe.error(new EmployeeNotFoundException(employeeId)))
+        .toSingle()
+        .map(employeeDB -> {
+            log.info("Empleado encontrado: {}", employeeDB);
+            employeeDB.setFirstName(employeeRequest.firstName());
+            employeeDB.setLastName(employeeRequest.lastName());
+            employeeDB.setPosition(employeeRequest.position());
+            employeeDB.setFullTime(employeeRequest.fullTime());
+            return employeeDB;
+        })
+        .flatMap(employee -> this.employeeRepository.save(employee).toObservable()
+                .doOnNext(employeeDB -> log.info("Empleado actualizado: {}", employeeDB))
+                .firstOrError())
+        .map(this.employeeMapper::toEmployeeResponse);
+```
+
+Hay dos operadores nuevos importantes aquí:
+
+**¿Por qué `.toObservable()` dentro del `flatMap`?**
+
+`Single.flatMap()` espera que la función devuelva otro `Single<T>`. El método `save()`
+devuelve `Single<Employee>`, pero necesitamos aplicar `doOnNext()` antes del resultado
+final. `doOnNext()` es un operador disponible en `Observable` pero no directamente en
+`Single`, así que convertimos momentáneamente a `Observable` para poder usarlo.
+
+**¿Qué hace `.firstOrError()`?**
+
+Convierte el `Observable<Employee>` de vuelta a `Single<Employee>` tomando el primer
+(y único) elemento emitido. Si el observable estuviera vacío lanzaría un error, pero
+en nuestro caso `save()` siempre emite exactamente un elemento.
+
+```
+Single<Employee>
+    → .toObservable()     (para usar doOnNext)
+    → Observable<Employee>
+    → .firstOrError()     (volvemos a Single)
+    → Single<Employee>
+```
+
+#### `deleteEmployee` — `Mono<Void>` → `Completable`
+
+```bash
+// Antes (Reactor)
+return this.employeeRepository.findById(employeeId)
+        .switchIfEmpty(Mono.error(...))
+        .flatMap(this.employeeRepository::delete);         // Mono<Void>
+
+// Ahora (RxJava)
+return this.employeeRepository.findById(employeeId)
+        .switchIfEmpty(Maybe.error(...))
+        .toSingle()
+        .flatMapCompletable(this.employeeRepository::delete);  // Completable
+```
+
+**¿Qué es `Completable`?**
+
+Es el equivalente de `Mono<Void>` en Reactor. Representa una operación que no devuelve
+ningún valor, solo señala si terminó con **éxito** o con **error**. Es perfecto para
+operaciones de eliminación.
+
+**¿Por qué `flatMapCompletable` en lugar de `flatMap`?**
+
+Porque el método `deleteById()` del repositorio devuelve `Completable`, no `Single`.
+En RxJava cada tipo tiene su propio `flatMap` especializado:
+
+| Método                  | ¿Qué devuelve la función interna? |
+|-------------------------|-----------------------------------|
+| `.flatMap()`            | `Single<T>`                       |
+| `.flatMapCompletable()` | `Completable`                     |
+| `.flatMapObservable()`  | `Observable<T>`                   |
+| `.flatMapMaybe()`       | `Maybe<T>`                        |
+
+## ✅ Resumen general del Paso 9
+
+| Operación  | Reactor      | RxJava                   | Operadores clave nuevos              |
+|------------|--------------|--------------------------|--------------------------------------|
+| Listar     | `Flux<T>`    | `Observable<T>`          | `.map()`                             |
+| Buscar     | `Mono<T>`    | `Maybe<T>` → `Single<T>` | `.switchIfEmpty()`, `.toSingle()`    |
+| Crear      | `Mono<T>`    | `Single<T>`              | `.map()`                             |
+| Actualizar | `Mono<T>`    | `Single<T>`              | `.toObservable()`, `.firstOrError()` |
+| Eliminar   | `Mono<Void>` | `Completable`            | `.flatMapCompletable()`              |
+
+## 🧠 Mapa mental de tipos RxJava vs Reactor
+
+```
+Reactor          →       RxJava 3
+─────────────────────────────────────────────────────────
+Mono<T>          →       Single<T>       (exactamente 1 valor garantizado)
+Mono<T>          →       Maybe<T>        (0 o 1 valor, puede estar vacío)
+Mono<Void>       →       Completable     (sin valor, solo éxito o error)
+Flux<T>          →       Observable<T>   (N valores, sin backpressure)
+Flux<T>          →       Flowable<T>     (N valores, con backpressure)
+```
 
