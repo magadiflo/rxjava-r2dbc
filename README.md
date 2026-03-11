@@ -366,3 +366,72 @@ En nuestro proyecto nuevo no los necesitamos porque:
 > 💡 `Regla general`: Si `RxJava3CrudRepository` puede resolver la operación automáticamente, úsalo. Solo necesitarías
 > mapeo manual si tuvieras queries SQL nativas muy complejas con JOINs, y en ese caso los métodos de mapeo irían en una
 > clase separada, no en la entidad.
+
+## 🗃️ PASO 6: `EmployeeRepository`
+
+````java
+public interface EmployeeRepository extends RxJava3CrudRepository<Employee, Integer> {
+    Observable<Employee> findByPosition(String position);
+
+    Observable<Employee> findByFullTime(Boolean isFullTime);
+
+    Observable<Employee> findByPositionAndFullTime(String position, Boolean isFullTime);
+
+    Observable<Employee> findByFirstName(String firstName);
+}
+````
+
+### 📖 Explicación de cada cambio
+
+#### 1️⃣ `R2dbcRepository` → `RxJava3CrudRepository`
+
+Este es el cambio más importante del repositorio. Veamos qué es cada uno:
+
+- Antes — `R2dbcRepository<Employee, Long>`. Era la interfaz de `Spring Data R2DBC` que devuelve tipos `Reactor`.
+  Por ejemplo, su método `findAll()` devolvía `Flux<Employee>` y su método `findById()` devolvía `Mono<Employee>`.
+- Ahora — `RxJava3CrudRepository<Employee, Long>`. Es la interfaz de `Spring Data R2DBC` con soporte nativo para
+  `RxJava 3`. Los mismos métodos ahora devuelven tipos `RxJava`. Por ejemplo, `findAll()` devuelve
+  `Observable<Employee>` y `findById()` devuelve `Maybe<Employee>`.
+
+Los dos parámetros genéricos no cambian:
+
+- `Employee` — el tipo de la entidad que maneja.
+- `Long` — el tipo del ID de esa entidad.
+
+> 💡 Lo importante aquí es entender que no estamos haciendo ninguna conversión manual. Spring Data internamente sigue
+> usando R2DBC, pero nos entrega los resultados directamente en tipos `RxJava`. Eso es exactamente lo que queríamos: 0%
+> Reactor visible en nuestro código.
+
+#### 2️⃣ `Flux<Employee>` → `Observable<Employee>`
+
+Todos los métodos que devolvían `Flux` ahora devuelven `Observable`. ¿Por qué `Observable` y no `Flowable`?
+
+| Tipo            | ¿Cuándo usarlo?                                                                                                             |
+|-----------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `Observable<T>` | Cuando la cantidad de datos es manejable y no necesitas control de velocidad                                                |
+| `Flowable<T>`   | Cuando puedes recibir millones de registros y necesitas controlar que el productor no abrume al consumidor `(backpressure)` |
+
+En un CRUD de empleados, la cantidad de registros es predecible y manejable, así que `Observable` es la
+elección correcta. Si estuvieras procesando millones de transacciones bancarias en tiempo real, ahí usarías `Flowable`.
+
+#### 3️⃣ ¿Qué métodos nos da `RxJava3CrudRepository` de forma gratuita?
+
+Al extender `RxJava3CrudRepository`, heredamos automáticamente estos métodos sin escribir ni una línea de código:
+
+### Migración de repositorios RxJava a Project Reactor
+
+| Método                | Tipo RxJava            | Tipo Reactor     |
+|-----------------------|------------------------|------------------|
+| `findAll()`           | `Observable<Employee>` | `Flux<Employee>` |
+| `findById(Long id)`   | `Maybe<Employee>`      | `Mono<Employee>` |
+| `save(Employee e)`    | `Single<Employee>`     | `Mono<Employee>` |
+| `delete(Employee e)`  | `Completable`          | `Mono<Void>`     |
+| `deleteById(Long id)` | `Completable`          | `Mono<Void>`     |
+| `existsById(Long id)` | `Single<Boolean>`      | `Mono<Boolean>`  |
+| `count()`             | `Single<Long>`         | `Mono<Long>`     |
+
+> 💡 `Nota algo muy importante`: `findById()` devuelve `Maybe<Employee>` y no `Single<Employee>`.
+> ¿Por qué? Porque `Maybe` representa `0 o 1` resultado — el empleado puede existir o no.
+> `Single` en cambio siempre debe emitir exactamente `1` resultado o `un error`, por eso no sería correcto para
+> un `findById` donde el registro podría no existir.
+
